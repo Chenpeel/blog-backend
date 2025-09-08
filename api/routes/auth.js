@@ -1,13 +1,13 @@
 const express = require("express");
-const bcrypt = require("bcrypt");
 const router = express.Router();
 const logger = require("../utils/logger");
+const PasswordCrypto = require("../utils/crypto");
 const { checkVisitorExpiry } = require("../middleware/auth");
 
 // 登录验证
 router.post("/login", async (req, res) => {
   try {
-    const { password, type } = req.body;
+    const { password } = req.body;
 
     if (!password) {
       return res.status(400).json({
@@ -16,22 +16,25 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    // 从数据库获取密码设置
+    // 从数据库获取哈希密码设置
     const couplePasswordResult = await global.db.get(
-      "SELECT value FROM settings WHERE key = 'couple_password'",
+      "SELECT value FROM settings WHERE key = 'couple_password_hash'",
     );
     const visitorPasswordResult = await global.db.get(
-      "SELECT value FROM settings WHERE key = 'visitor_password'",
+      "SELECT value FROM settings WHERE key = 'visitor_password_hash'",
     );
 
-    const couplePassword = couplePasswordResult?.value || "";
-    const visitorPassword = visitorPasswordResult?.value || "";
+    const couplePasswordHash = couplePasswordResult?.value || "";
+    const visitorPasswordHash = visitorPasswordResult?.value || "";
 
     let userType = null;
     let loginSuccess = false;
 
     // 检查情侣密码
-    if (password === couplePassword && couplePassword) {
+    if (
+      couplePasswordHash &&
+      (await PasswordCrypto.verifyPassword(password, couplePasswordHash))
+    ) {
       userType = "couple";
       loginSuccess = true;
       logger.info("情侣用户登录成功", {
@@ -40,7 +43,10 @@ router.post("/login", async (req, res) => {
       });
     }
     // 检查访客密码
-    else if (password === visitorPassword && visitorPassword) {
+    else if (
+      visitorPasswordHash &&
+      (await PasswordCrypto.verifyPassword(password, visitorPasswordHash))
+    ) {
       userType = "visitor";
       loginSuccess = true;
       logger.info("访客用户登录成功", {
@@ -88,7 +94,9 @@ router.post("/login", async (req, res) => {
 
     res.json({
       success: true,
-      userType,
+      user: {
+        type: userType,
+      },
       message: `${userType === "couple" ? "情侣" : "访客"}登录成功`,
       expiryTime: req.session.expiryTime || null,
     });
@@ -106,14 +114,15 @@ router.get("/status", checkVisitorExpiry, (req, res) => {
   if (req.session && req.session.authenticated) {
     res.json({
       success: true,
-      authenticated: true,
-      userType: req.session.userType,
+      user: {
+        type: req.session.userType,
+      },
       loginTime: req.session.loginTime,
       expiryTime: req.session.expiryTime || null,
     });
   } else {
     res.json({
-      success: true,
+      success: false,
       authenticated: false,
     });
   }
